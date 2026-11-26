@@ -72,6 +72,7 @@ public class MainActivity extends android.app.Activity {
     private boolean onayDialogShown;
     private boolean incomingApkHandled = false;
     private boolean waitingForOnayUninstall;
+    private boolean waitingForInstallPermission;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -609,6 +610,30 @@ public class MainActivity extends android.app.Activity {
         return new Risk("ЖОҒАРЫ НАЗАР", sensitive + " сезімтал рұқсат сұралды. Дереккөзін мұқият тексер.", "#A12626");
     }
 
+    private void openInstallPermissionSettings() {
+        waitingForInstallPermission = true;
+        Toast.makeText(this,
+                "SafeInstall үшін «белгісіз қолданбалардан орнатуға рұқсатты» қосыңыз.",
+                Toast.LENGTH_LONG).show();
+        try {
+            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (ActivityNotFoundException error) {
+            waitingForInstallPermission = false;
+            Toast.makeText(this, "Орнату рұқсатының баптауы ашылмады.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (!waitingForInstallPermission || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        if (getPackageManager().canRequestPackageInstalls()) {
+            waitingForInstallPermission = false;
+            mainHandler.postDelayed(this::startSystemInstaller, 250L);
+        }
+    }
+
     private void startSystemInstaller() {
         if (selectedApk == null || !selectedApk.exists()) {
             Toast.makeText(this, "Алдымен APK таңда", Toast.LENGTH_SHORT).show();
@@ -628,9 +653,7 @@ public class MainActivity extends android.app.Activity {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 && !getPackageManager().canRequestPackageInstalls()) {
-            Toast.makeText(this, "SafeInstall-ге APK орнатуға рұқсат бер", Toast.LENGTH_LONG).show();
-            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:" + getPackageName())));
+            openInstallPermissionSettings();
             return;
         }
 
