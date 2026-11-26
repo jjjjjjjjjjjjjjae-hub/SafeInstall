@@ -3,6 +3,7 @@
 
     <!-- Needed only to hand the user-selected APK to Android's own installer. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="false"
