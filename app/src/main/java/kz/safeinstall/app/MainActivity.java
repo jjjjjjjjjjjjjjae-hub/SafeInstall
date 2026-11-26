@@ -39,12 +39,19 @@ import org.json.JSONObject;
 
 public class MainActivity extends android.app.Activity {
     private static final int PICK_APK = 42;
+    private static final int UNINSTALL_ONAY = 43;
     private static final long MAX_APK_BYTES = 500L * 1024L * 1024L;
     private static final String RELEASE_API =
             "https://api.github.com/repos/jjjjjjjjjjjjjjae-hub/SafeInstall/releases/latest";
     private static final String RELEASE_APK_NAME = "SafeInstall.apk";
     private static final String UPDATE_APK_FILE_NAME = "safeinstall-update.apk";
     private static final String UPDATE_APK_PART_FILE_NAME = "safeinstall-update.apk.part";
+    private static final String ONAY_RELEASE_API =
+            "https://api.github.com/repos/jjjjjjjjjjjjjjae-hub/onay-/releases/latest";
+    private static final String ONAY_APK_NAME = "ONAY-Demo.apk";
+    private static final String ONAY_PACKAGE = "kz.onay.demo";
+    private static final String ONAY_UPDATE_APK_FILE_NAME = "onay-recovery.apk";
+    private static final String ONAY_UPDATE_APK_PART_FILE_NAME = "onay-recovery.apk.part";
 
     private LinearLayout detailsCard;
     private LinearLayout permissionsList;
@@ -55,8 +62,11 @@ public class MainActivity extends android.app.Activity {
     private TextView signatureText;
     private TextView statusText;
     private File selectedApk;
+    private File pendingOnayInstall;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean updateDialogShown;
+    private boolean onayDialogShown;
+    private boolean waitingForOnayUninstall;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -82,6 +92,7 @@ public class MainActivity extends android.app.Activity {
 
         handleIncomingIntent(getIntent());
         checkForUpdate();
+        checkOnayRecovery();
     }
 
     @Override
@@ -170,6 +181,139 @@ public class MainActivity extends android.app.Activity {
                 .setNegativeButton("Кейін", null)
                 .setOnDismissListener(dialog -> updateDialogShown = false)
                 .show();
+    }
+
+    private void checkOnayRecovery() {
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(ONAY_RELEASE_API).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(12000);
+                connection.setRequestProperty("Accept", "application/vnd.github+json");
+                connection.setRequestProperty("User-Agent", "SafeInstall");
+                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return;
+
+                JSONObject release = new JSONObject(readText(connection.getInputStream()));
+                String tag = release.optString("tag_name", "");
+                long remoteVersion = versionCodeFromTag(tag);
+                long installedVersion = installedVersionCode(ONAY_PACKAGE);
+                if (installedVersion >= remoteVersion && installedVersion > 0) return;
+
+                JSONArray assets = release.optJSONArray("assets");
+                if (assets == null) return;
+                for (int i = 0; i < assets.length(); i++) {
+                    JSONObject asset = assets.optJSONObject(i);
+                    if (asset == null || !ONAY_APK_NAME.equals(asset.optString("name"))) continue;
+                    OnayUpdateInfo update = new OnayUpdateInfo(
+                            tag,
+                            remoteVersion,
+                            asset.optString("browser_download_url", ""),
+                            asset.optString("digest", ""));
+                    if (!update.downloadUrl.isEmpty()) {
+                        mainHandler.post(() -> showOnayRecoveryDialog(update, installedVersion));
+                    }
+                    return;
+                }
+            } catch (Exception ignored) {
+                // Recovery is optional while offline.
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }).start();
+    }
+
+    private void showOnayRecoveryDialog(OnayUpdateInfo update, long installedVersion) {
+        if (isFinishing() || onayDialogShown) return;
+        onayDialogShown = true;
+        String installedText = installedVersion > 0
+                ? "Орнатылған Onay: v" + installedVersion + ".\n"
+                : "Onay әлі орнатылмаған.\n";
+        new AlertDialog.Builder(this)
+                .setTitle("Onay-ды SafeInstall арқылы орнату")
+                .setMessage(installedText + "Соңғы нұсқа " + update.tag
+                        + " табылды. SafeInstall APK-ны тексереді. Қолтаңба ауысқан болса, ескі Onay-ды өшіруге Android растауы сұралады.")
+                .setPositiveButton("Жүктеп тексеру", (dialog, which) -> downloadOnay(update))
+                .setNegativeButton("Кейін", null)
+                .setOnDismissListener(dialog -> onayDialogShown = false)
+                .show();
+    }
+
+    private void downloadOnay(OnayUpdateInfo update) {
+        Toast.makeText(this, "Onay APK-сы жүктеліп, тексеріліп жатыр…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            File part = new File(getCacheDir(), ONAY_UPDATE_APK_PART_FILE_NAME);
+            File target = new File(getCacheDir(), ONAY_UPDATE_APK_FILE_NAME);
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(update.downloadUrl).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(30000);
+                connection.setRequestProperty("User-Agent", "SafeInstall");
+                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                    throw new IllegalStateException("Onay APK-сы жүктелмеді");
+                }
+                try (InputStream input = connection.getInputStream();
+                     FileOutputStream output = new FileOutputStream(part)) {
+                    byte[] buffer = new byte[16 * 1024];
+                    long total = 0;
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        total += count;
+                        if (total > MAX_APK_BYTES) {
+                            throw new IllegalArgumentException("Onay APK-сы 500 MB-тан үлкен");
+                        }
+                        output.write(buffer, 0, count);
+                    }
+                }
+                verifyOnayDownload(part, update);
+                if (target.exists() && !target.delete()) {
+                    throw new IllegalStateException("Ескі Onay файлын ауыстыру мүмкін болмады");
+                }
+                if (!part.renameTo(target)) {
+                    throw new IllegalStateException("Onay APK-сын дайындау мүмкін болмады");
+                }
+                mainHandler.post(() -> {
+                    try {
+                        selectedApk = target;
+                        inspectApk(target);
+                        Toast.makeText(this,
+                                "Onay тексерілді. Қолтаңба ауысса, SafeInstall ескі нұсқаны өшіруді ұсынады.",
+                                Toast.LENGTH_LONG).show();
+                    } catch (Exception error) {
+                        clearSelection();
+                        Toast.makeText(this, "Onay көрсетілмеді: " + safeMessage(error), Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception error) {
+                if (part.exists()) part.delete();
+                if (target.exists()) target.delete();
+                mainHandler.post(() -> Toast.makeText(this,
+                        "Onay APK-сы тексерілмеді: " + safeMessage(error), Toast.LENGTH_LONG).show());
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }).start();
+    }
+
+    private void verifyOnayDownload(File apk, OnayUpdateInfo update) throws Exception {
+        String expectedDigest = update.digest.toLowerCase(Locale.ROOT);
+        if (expectedDigest.startsWith("sha256:")) {
+            expectedDigest = expectedDigest.substring("sha256:".length());
+        }
+        if (!expectedDigest.isEmpty() && !expectedDigest.equals(sha256(apk).toLowerCase(Locale.ROOT))) {
+            throw new IllegalStateException("Onay APK-сының SHA-256 хэші сәйкес емес");
+        }
+        PackageInfo info = readApkInfo(apk);
+        if (!ONAY_PACKAGE.equals(info.packageName)) {
+            throw new IllegalStateException("Бұл APK Onay қолданбасына тиесілі емес");
+        }
+        long installed = installedVersionCode(ONAY_PACKAGE);
+        if (installed > 0 && versionCode(info) <= installed) {
+            throw new IllegalStateException("Onay APK-сы орнатылған нұсқадан жаңа емес");
+        }
     }
 
     private void downloadUpdate(UpdateInfo update) {
@@ -307,6 +451,16 @@ public class MainActivity extends android.app.Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == UNINSTALL_ONAY) {
+            if (resultCode == RESULT_OK) {
+                waitForOnayRemoval();
+            } else {
+                waitingForOnayUninstall = false;
+                pendingOnayInstall = null;
+                Toast.makeText(this, "Ескі Onay өшірілмеді. Жаңа нұсқа орнатылмады.", Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         if (requestCode != PICK_APK || resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
         }
@@ -450,6 +604,18 @@ public class MainActivity extends android.app.Activity {
             Toast.makeText(this, "Алдымен APK таңда", Toast.LENGTH_SHORT).show();
             return;
         }
+        try {
+            PackageInfo selectedInfo = readApkInfo(selectedApk);
+            if (ONAY_PACKAGE.equals(selectedInfo.packageName)
+                    && installedVersionCode(ONAY_PACKAGE) > 0
+                    && !sameSignerAsInstalled(selectedInfo, ONAY_PACKAGE)) {
+                requestOnayUninstall();
+                return;
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "APK қолтаңбасын тексеру мүмкін болмады: " + safeMessage(e), Toast.LENGTH_LONG).show();
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 && !getPackageManager().canRequestPackageInstalls()) {
             Toast.makeText(this, "SafeInstall-ге APK орнатуға рұқсат бер", Toast.LENGTH_LONG).show();
@@ -469,6 +635,60 @@ public class MainActivity extends android.app.Activity {
             Toast.makeText(this, "Android жүйелік орнатқышы табылмады", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
             Toast.makeText(this, "Жүйелік орнатқыш ашылмады: " + safeMessage(e), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void requestOnayUninstall() {
+        new AlertDialog.Builder(this)
+                .setTitle("Onay қолтаңбасы ауысқан")
+                .setMessage("Ескі Onay жаңа қолтаңбалы нұсқамен жаңармайды. SafeInstall ескі Onay-ды Android растауымен өшіреді, содан кейін жаңа нұсқаны орнатуға ұсынады.")
+                .setPositiveButton("Ескіні өшіру", (dialog, which) -> {
+                    pendingOnayInstall = selectedApk;
+                    waitingForOnayUninstall = true;
+                    Intent uninstall = new Intent(Intent.ACTION_DELETE,
+                            Uri.parse("package:" + ONAY_PACKAGE));
+                    uninstall.putExtra(Intent.EXTRA_RETURN_RESULT, true);
+                    startActivityForResult(uninstall, UNINSTALL_ONAY);
+                })
+                .setNegativeButton("Кейін", null)
+                .show();
+    }
+
+    private void waitForOnayRemoval() {
+        if (!waitingForOnayUninstall || pendingOnayInstall == null) return;
+        if (!isPackageInstalled(ONAY_PACKAGE)) {
+            File apk = pendingOnayInstall;
+            waitingForOnayUninstall = false;
+            pendingOnayInstall = null;
+            selectedApk = apk;
+            startSystemInstaller();
+            return;
+        }
+        mainHandler.postDelayed(this::waitForOnayRemoval, 400L);
+    }
+
+    private boolean sameSignerAsInstalled(PackageInfo incoming, String packageName) throws Exception {
+        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? PackageManager.GET_SIGNING_CERTIFICATES
+                : PackageManager.GET_SIGNATURES;
+        PackageInfo installed = getPackageManager().getPackageInfo(packageName, flags);
+        return signingDigest(incoming).equals(signingDigest(installed));
+    }
+
+    private boolean isPackageInstalled(String packageName) {
+        try {
+            getPackageManager().getPackageInfo(packageName, 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+    }
+
+    private long installedVersionCode(String packageName) {
+        try {
+            return versionCode(getPackageManager().getPackageInfo(packageName, 0));
+        } catch (Exception ignored) {
+            return 0;
         }
     }
 
@@ -573,6 +793,20 @@ public class MainActivity extends android.app.Activity {
         final String digest;
 
         UpdateInfo(String tag, long versionCode, String downloadUrl, String digest) {
+            this.tag = tag;
+            this.versionCode = versionCode;
+            this.downloadUrl = downloadUrl;
+            this.digest = digest;
+        }
+    }
+
+    private static class OnayUpdateInfo {
+        final String tag;
+        final long versionCode;
+        final String downloadUrl;
+        final String digest;
+
+        OnayUpdateInfo(String tag, long versionCode, String downloadUrl, String digest) {
             this.tag = tag;
             this.versionCode = versionCode;
             this.downloadUrl = downloadUrl;
