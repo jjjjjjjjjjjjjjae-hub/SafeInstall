@@ -41,7 +41,7 @@ jobs:
           echo "$RUNNER_TEMP/gradle-8.10/bin" >> "$GITHUB_PATH"
 
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: gradle assembleDebug --stacktrace -PappVersionCode="${{ github.run_number }}" -PappVersionName="1.2.${{ github.run_number }}"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -57,8 +57,8 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: SafeInstall v1.1.${{ github.run_number }}
-          prerelease: true
+          tag_name: v1.2.${{ github.run_number }}
+          name: SafeInstall v1.2.${{ github.run_number }}
+          prerelease: false
           files: SafeInstall.apk
 
