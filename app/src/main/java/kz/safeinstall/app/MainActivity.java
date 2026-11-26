@@ -1,6 +1,7 @@
 package kz.safeinstall.app;
 
 import android.content.ContentResolver;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
@@ -39,6 +40,7 @@ public class MainActivity extends android.app.Activity {
     private TextView appNameText;
     private TextView metaText;
     private TextView signatureText;
+    private TextView statusText;
     private File selectedApk;
 
     @Override
@@ -53,6 +55,7 @@ public class MainActivity extends android.app.Activity {
         appNameText = findViewById(R.id.appNameText);
         metaText = findViewById(R.id.metaText);
         signatureText = findViewById(R.id.signatureText);
+        statusText = findViewById(R.id.statusText);
 
         Button selectButton = findViewById(R.id.selectButton);
         Button installButton = findViewById(R.id.installButton);
@@ -61,6 +64,44 @@ public class MainActivity extends android.app.Activity {
         selectButton.setOnClickListener(v -> chooseApk());
         installButton.setOnClickListener(v -> startSystemInstaller());
         clearButton.setOnClickListener(v -> clearSelection());
+
+        handleIncomingIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIncomingIntent(intent);
+    }
+
+    private void handleIncomingIntent(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        if (!Intent.ACTION_VIEW.equals(action) && !Intent.ACTION_SEND.equals(action)) return;
+
+        Uri source = intent.getData();
+        if (Intent.ACTION_SEND.equals(action)) {
+            source = getSharedUri(intent);
+        }
+        if (source == null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0) {
+            source = intent.getClipData().getItemAt(0).getUri();
+        }
+        if (source == null) return;
+
+        try {
+            selectedApk = copyToPrivateCache(source);
+            inspectApk(selectedApk);
+            Toast.makeText(this, "APK SafeInstall арқылы тексерілді", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            clearSelection();
+            Toast.makeText(this, "APK оқу мүмкін болмады: " + safeMessage(e), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private Uri getSharedUri(Intent intent) {
+        return intent.getParcelableExtra(Intent.EXTRA_STREAM);
     }
 
     private void chooseApk() {
@@ -141,6 +182,7 @@ public class MainActivity extends android.app.Activity {
 
         appNameText.setText(appLabel);
         metaText.setText(meta.toString());
+        statusText.setText(installationStatus(info));
         signatureText.setText("Қолтаңба SHA-256: " + signingDigest(info));
         renderPermissions(info.requestedPermissions);
 
@@ -218,27 +260,71 @@ public class MainActivity extends android.app.Activity {
             Toast.makeText(this, "Алдымен APK таңда", Toast.LENGTH_SHORT).show();
             return;
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && !getPackageManager().canRequestPackageInstalls()) {
+            Toast.makeText(this, "SafeInstall-ге APK орнатуға рұқсат бер", Toast.LENGTH_LONG).show();
+            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName())));
+            return;
+        }
+
         try {
             Uri apkUri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", selectedApk);
-            Intent intent = new Intent(Intent.ACTION_VIEW);
+            // ACTION_INSTALL_PACKAGE prevents SafeInstall's own APK intent filter from looping back here.
+            Intent intent = new Intent(Intent.ACTION_INSTALL_PACKAGE);
             intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(this, "Android жүйелік орнатқышы табылмады", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                    && !getPackageManager().canRequestPackageInstalls()) {
-                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:" + getPackageName())));
-            } else {
-                Toast.makeText(this, "Жүйелік орнатқыш ашылмады: " + safeMessage(e), Toast.LENGTH_LONG).show();
-            }
+            Toast.makeText(this, "Жүйелік орнатқыш ашылмады: " + safeMessage(e), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private String installationStatus(PackageInfo incoming) {
+        try {
+            int flags = 0;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                flags |= PackageManager.GET_SIGNING_CERTIFICATES;
+            } else {
+                flags |= PackageManager.GET_SIGNATURES;
+            }
+            PackageInfo installed = getPackageManager().getPackageInfo(incoming.packageName, flags);
+            long installedVersion = versionCode(installed);
+            long incomingVersion = versionCode(incoming);
+            String versionMessage;
+            if (incomingVersion > installedVersion) {
+                versionMessage = "ЖАҢАРТУ: орнатылған " + installedVersion + " → жаңа " + incomingVersion;
+            } else if (incomingVersion == installedVersion) {
+                versionMessage = "Сол нұсқа орнатылған: " + installedVersion;
+            } else {
+                versionMessage = "ЕСКЕРТУ: бұл APK орнатылған нұсқадан ескі (" + incomingVersion
+                        + " < " + installedVersion + ")";
+            }
+
+            String incomingSigner = signingDigest(incoming);
+            String installedSigner = signingDigest(installed);
+            if (!incomingSigner.equals(installedSigner)) {
+                return versionMessage + "\nҚолтаңба сәйкес емес: Android жаңартуды қабылдамауы мүмкін.";
+            }
+            return versionMessage + "\nҚолтаңба сәйкес: Android жаңартуға рұқсат бере алады.";
+        } catch (PackageManager.NameNotFoundException e) {
+            return "ЖАҢА ОРНАТУ: бұл пакет бұрын орнатылмаған сияқты.";
+        } catch (SecurityException e) {
+            return "Пакет күйін Android жасырып тұр. Жаңарту/орнатуды жүйелік орнатқыш шешеді.";
+        }
+    }
+
+    private long versionCode(PackageInfo info) {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode;
     }
 
     private void clearSelection() {
         selectedApk = null;
         detailsCard.setVisibility(View.GONE);
         emptyText.setVisibility(View.VISIBLE);
+        statusText.setText("");
         File dir = new File(getCacheDir(), "apk");
         File file = new File(dir, "selected.apk");
         if (file.exists()) file.delete();
@@ -302,3 +388,4 @@ public class MainActivity extends android.app.Activity {
         }
     }
 }
+
