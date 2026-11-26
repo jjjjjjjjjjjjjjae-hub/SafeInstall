@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="safe_green">#0B7A53</color>
+    <color name="safe_green_dark">#075A3D</color>
+    <color name="ink">#17201D</color>
+    <color name="muted">#5F6C67</color>
+    <color name="surface">#F6FAF8</color>
+    <color name="warning">#A86100</color>
+    <color name="danger">#A12626</color>
+</resources>
