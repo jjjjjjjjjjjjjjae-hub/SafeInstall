@@ -248,8 +248,8 @@ public class MainActivity extends android.app.Activity {
     private void downloadOnay(OnayUpdateInfo update) {
         Toast.makeText(this, "Onay APK-сы жүктеліп, тексеріліп жатыр…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            File part = new File(getCacheDir(), ONAY_UPDATE_APK_PART_FILE_NAME);
-            File target = new File(getCacheDir(), ONAY_UPDATE_APK_FILE_NAME);
+            File part = apkCacheFile(ONAY_UPDATE_APK_PART_FILE_NAME);
+            File target = apkCacheFile(ONAY_UPDATE_APK_FILE_NAME);
             HttpURLConnection connection = null;
             try {
                 connection = (HttpURLConnection) new URL(update.downloadUrl).openConnection();
@@ -327,8 +327,8 @@ public class MainActivity extends android.app.Activity {
     private void downloadUpdate(UpdateInfo update) {
         Toast.makeText(this, "SafeInstall жаңартуы жүктеліп жатыр…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            File part = new File(getCacheDir(), UPDATE_APK_PART_FILE_NAME);
-            File target = new File(getCacheDir(), UPDATE_APK_FILE_NAME);
+            File part = apkCacheFile(UPDATE_APK_PART_FILE_NAME);
+            File target = apkCacheFile(UPDATE_APK_FILE_NAME);
             HttpURLConnection connection = null;
             try {
                 connection = (HttpURLConnection) new URL(update.downloadUrl).openConnection();
@@ -662,6 +662,7 @@ public class MainActivity extends android.app.Activity {
             // ACTION_INSTALL_PACKAGE prevents SafeInstall's own APK intent filter from looping back here.
             Intent intent = new Intent(Intent.ACTION_INSTALL_PACKAGE);
             intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+            intent.setClipData(android.content.ClipData.newRawUri("safeinstall-apk", apkUri));
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
         } catch (ActivityNotFoundException e) {
@@ -761,6 +762,14 @@ public class MainActivity extends android.app.Activity {
 
     private long versionCode(PackageInfo info) {
         return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode;
+    }
+
+    private File apkCacheFile(String fileName) {
+        File dir = new File(getCacheDir(), "apk");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IllegalStateException("APK уақытша бумасын жасау мүмкін болмады");
+        }
+        return new File(dir, fileName);
     }
 
     private void clearSelection() {
