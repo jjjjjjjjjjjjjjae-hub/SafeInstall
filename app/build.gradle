@@ -4,6 +4,7 @@ plugins {
 
 def buildVersionCode = (project.findProperty("appVersionCode") ?: "3").toString().toInteger()
 def buildVersionName = (project.findProperty("appVersionName") ?: "1.2").toString()
+def hasReleaseSigning = project.hasProperty("signingStoreFile")
 
 android {
     namespace "kz.safeinstall.app"
@@ -15,6 +16,26 @@ android {
         targetSdk 35
         versionCode buildVersionCode
         versionName buildVersionName
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(project.property("signingStoreFile"))
+                storePassword project.property("signingStorePassword")
+                keyAlias project.property("signingKeyAlias")
+                keyPassword project.property("signingKeyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
     }
 }
 
