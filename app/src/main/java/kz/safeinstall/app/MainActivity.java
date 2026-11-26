@@ -124,7 +124,18 @@ public class MainActivity extends android.app.Activity {
         try {
             selectedApk = copyToPrivateCache(source);
             inspectApk(selectedApk);
-            Toast.makeText(this, "APK SafeInstall арқылы тексерілді", Toast.LENGTH_SHORT).show();
+            PackageInfo incoming = readApkInfo(selectedApk);
+            if (!ONAY_PACKAGE.equals(incoming.packageName)) {
+                clearSelection();
+                Toast.makeText(this,
+                        "Автоматты орнату тек ONAY жаңартуына арналған.",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            Toast.makeText(this,
+                    "ONAY тексерілді. Жүйелік орнату ашылып жатыр…",
+                    Toast.LENGTH_SHORT).show();
+            startSystemInstaller();
         } catch (Exception e) {
             clearSelection();
             Toast.makeText(this, "APK оқу мүмкін болмады: " + safeMessage(e), Toast.LENGTH_LONG).show();
@@ -288,8 +299,9 @@ public class MainActivity extends android.app.Activity {
                         selectedApk = target;
                         inspectApk(target);
                         Toast.makeText(this,
-                                "Onay тексерілді. Қолтаңба ауысса, SafeInstall ескі нұсқаны өшіруді ұсынады.",
-                                Toast.LENGTH_LONG).show();
+                                "Onay тексерілді. Жүйелік орнату ашылып жатыр…",
+                                Toast.LENGTH_SHORT).show();
+                        startSystemInstaller();
                     } catch (Exception error) {
                         clearSelection();
                         Toast.makeText(this, "Onay көрсетілмеді: " + safeMessage(error), Toast.LENGTH_LONG).show();
