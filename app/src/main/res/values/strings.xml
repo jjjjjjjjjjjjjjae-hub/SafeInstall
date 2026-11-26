@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SafeInstall</string>
+    <string name="select_apk">APK таңдау</string>
+    <string name="install">Жүйелік орнатқышты ашу</string>
+    <string name="clear">Тазалау</string>
+    <string name="no_apk">Әзірге APK таңдалмады</string>
+    <string name="select_apk_hint">Орнатпас бұрын файл туралы ақпаратты тексереміз</string>
+    <string name="security_note">Ескерту: бұл құрал зиянды кодқа 100%% кепілдік бермейді. Ол APK метадерегін, қолтаңбасын, SHA-256 хэшін және сұралған рұқсаттарын көрсетеді. Орнатуды тек Android жүйелік орнатқышы орындайды.</string>
+</resources>
