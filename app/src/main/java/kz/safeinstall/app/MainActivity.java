@@ -1,5 +1,6 @@
 package kz.safeinstall.app;
 
+import android.app.AlertDialog;
 import android.content.ContentResolver;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
@@ -13,6 +14,8 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.View;
 import android.widget.Button;
@@ -26,12 +29,22 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.security.MessageDigest;
 import java.util.Locale;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class MainActivity extends android.app.Activity {
     private static final int PICK_APK = 42;
     private static final long MAX_APK_BYTES = 500L * 1024L * 1024L;
+    private static final String RELEASE_API =
+            "https://api.github.com/repos/jjjjjjjjjjjjjjae-hub/SafeInstall/releases/latest";
+    private static final String RELEASE_APK_NAME = "SafeInstall.apk";
+    private static final String UPDATE_APK_FILE_NAME = "safeinstall-update.apk";
+    private static final String UPDATE_APK_PART_FILE_NAME = "safeinstall-update.apk.part";
 
     private LinearLayout detailsCard;
     private LinearLayout permissionsList;
@@ -42,6 +55,8 @@ public class MainActivity extends android.app.Activity {
     private TextView signatureText;
     private TextView statusText;
     private File selectedApk;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private boolean updateDialogShown;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -66,6 +81,7 @@ public class MainActivity extends android.app.Activity {
         clearButton.setOnClickListener(v -> clearSelection());
 
         handleIncomingIntent(getIntent());
+        checkForUpdate();
     }
 
     @Override
@@ -102,6 +118,183 @@ public class MainActivity extends android.app.Activity {
     @SuppressWarnings("deprecation")
     private Uri getSharedUri(Intent intent) {
         return intent.getParcelableExtra(Intent.EXTRA_STREAM);
+    }
+
+    private void checkForUpdate() {
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(RELEASE_API).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(12000);
+                connection.setRequestProperty("Accept", "application/vnd.github+json");
+                connection.setRequestProperty("User-Agent", "SafeInstall");
+                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return;
+
+                JSONObject release = new JSONObject(readText(connection.getInputStream()));
+                String tag = release.optString("tag_name", "");
+                long remoteVersionCode = versionCodeFromTag(tag);
+                if (remoteVersionCode <= currentVersionCode()) return;
+
+                JSONArray assets = release.optJSONArray("assets");
+                if (assets == null) return;
+                for (int i = 0; i < assets.length(); i++) {
+                    JSONObject asset = assets.optJSONObject(i);
+                    if (asset == null || !RELEASE_APK_NAME.equals(asset.optString("name"))) continue;
+                    UpdateInfo update = new UpdateInfo(
+                            tag,
+                            remoteVersionCode,
+                            asset.optString("browser_download_url", ""),
+                            asset.optString("digest", ""));
+                    if (!update.downloadUrl.isEmpty()) {
+                        mainHandler.post(() -> showUpdateDialog(update));
+                    }
+                    return;
+                }
+            } catch (Exception ignored) {
+                // Update checks are optional; the normal APK inspection still works offline.
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }).start();
+    }
+
+    private void showUpdateDialog(UpdateInfo update) {
+        if (isFinishing() || updateDialogShown) return;
+        updateDialogShown = true;
+        new AlertDialog.Builder(this)
+                .setTitle("SafeInstall жаңартуы бар")
+                .setMessage("Жаңа нұсқа " + update.tag + " табылды. APK алдымен SafeInstall ішінде тексеріледі, үнсіз орнатылмайды.")
+                .setPositiveButton("Жүктеп тексеру", (dialog, which) -> downloadUpdate(update))
+                .setNegativeButton("Кейін", null)
+                .setOnDismissListener(dialog -> updateDialogShown = false)
+                .show();
+    }
+
+    private void downloadUpdate(UpdateInfo update) {
+        Toast.makeText(this, "SafeInstall жаңартуы жүктеліп жатыр…", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            File part = new File(getCacheDir(), UPDATE_APK_PART_FILE_NAME);
+            File target = new File(getCacheDir(), UPDATE_APK_FILE_NAME);
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(update.downloadUrl).openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(30000);
+                connection.setRequestProperty("User-Agent", "SafeInstall");
+                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                    throw new IllegalStateException("Жаңарту файлы жүктелмеді");
+                }
+
+                try (InputStream input = connection.getInputStream();
+                     FileOutputStream output = new FileOutputStream(part)) {
+                    byte[] buffer = new byte[16 * 1024];
+                    long total = 0;
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        total += count;
+                        if (total > MAX_APK_BYTES) {
+                            throw new IllegalArgumentException("Жаңарту APK-сы 500 MB-тан үлкен");
+                        }
+                        output.write(buffer, 0, count);
+                    }
+                }
+                if (target.exists() && !target.delete()) {
+                    throw new IllegalStateException("Ескі жаңарту файлын ауыстыру мүмкін болмады");
+                }
+                if (!part.renameTo(target)) {
+                    throw new IllegalStateException("Жаңарту файлын дайындау мүмкін болмады");
+                }
+
+                verifyUpdate(target, update);
+                mainHandler.post(() -> {
+                    try {
+                        selectedApk = target;
+                        inspectApk(target);
+                        Toast.makeText(this, "Жаңарту тексерілді. Орнату / жаңарту батырмасын бас.", Toast.LENGTH_LONG).show();
+                    } catch (Exception error) {
+                        clearSelection();
+                        Toast.makeText(this, "Жаңарту көрсетілмеді: " + safeMessage(error), Toast.LENGTH_LONG).show();
+                    }
+                });
+            } catch (Exception error) {
+                if (part.exists()) part.delete();
+                if (target.exists()) target.delete();
+                mainHandler.post(() -> Toast.makeText(this,
+                        "SafeInstall жаңартуы тексерілмеді: " + safeMessage(error),
+                        Toast.LENGTH_LONG).show());
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }).start();
+    }
+
+    private void verifyUpdate(File apk, UpdateInfo update) throws Exception {
+        String expectedDigest = update.digest.toLowerCase(Locale.ROOT);
+        if (expectedDigest.startsWith("sha256:")) {
+            expectedDigest = expectedDigest.substring("sha256:".length());
+        }
+        if (!expectedDigest.isEmpty() && !expectedDigest.equals(sha256(apk).toLowerCase(Locale.ROOT))) {
+            throw new IllegalStateException("Жаңарту APK-сының SHA-256 хэші сәйкес емес");
+        }
+
+        PackageInfo info = readApkInfo(apk);
+        if (!getPackageName().equals(info.packageName)) {
+            throw new IllegalStateException("Жаңарту басқа package id-ге тиесілі");
+        }
+        if (versionCode(info) <= currentVersionCode()) {
+            throw new IllegalStateException("Жаңарту нұсқасы орнатылған нұсқадан жаңа емес");
+        }
+        PackageInfo installed = getPackageManager().getPackageInfo(getPackageName(),
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                        ? PackageManager.GET_SIGNING_CERTIFICATES
+                        : PackageManager.GET_SIGNATURES);
+        if (!signingDigest(info).equals(signingDigest(installed))) {
+            throw new IllegalStateException("Жаңарту қолтаңбасы осы SafeInstall нұсқасына сәйкес емес");
+        }
+    }
+
+    private PackageInfo readApkInfo(File apk) {
+        int flags = PackageManager.GET_PERMISSIONS;
+        flags |= Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                ? PackageManager.GET_SIGNING_CERTIFICATES
+                : PackageManager.GET_SIGNATURES;
+        PackageInfo info = getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), flags);
+        if (info == null || info.applicationInfo == null) {
+            throw new IllegalArgumentException("жарамды APK табылмады");
+        }
+        return info;
+    }
+
+    private long currentVersionCode() {
+        try {
+            return versionCode(getPackageManager().getPackageInfo(getPackageName(), 0));
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private long versionCodeFromTag(String tag) {
+        int end = tag.length() - 1;
+        while (end >= 0 && Character.isDigit(tag.charAt(end))) end--;
+        if (end == tag.length() - 1) return 0;
+        try {
+            return Long.parseLong(tag.substring(end + 1));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    private String readText(InputStream input) throws Exception {
+        StringBuilder result = new StringBuilder();
+        byte[] buffer = new byte[8192];
+        int count;
+        while ((count = input.read(buffer)) != -1) {
+            result.append(new String(buffer, 0, count, java.nio.charset.StandardCharsets.UTF_8));
+        }
+        return result.toString();
     }
 
     private void chooseApk() {
@@ -160,10 +353,7 @@ public class MainActivity extends android.app.Activity {
             flags |= PackageManager.GET_SIGNATURES;
         }
 
-        PackageInfo info = pm.getPackageArchiveInfo(apk.getAbsolutePath(), flags);
-        if (info == null || info.applicationInfo == null) {
-            throw new IllegalArgumentException("жарамды APK табылмады");
-        }
+        PackageInfo info = readApkInfo(apk);
 
         ApplicationInfo applicationInfo = info.applicationInfo;
         applicationInfo.sourceDir = apk.getAbsolutePath();
@@ -374,6 +564,20 @@ public class MainActivity extends android.app.Activity {
 
     private String safeMessage(Exception e) {
         return e.getMessage() == null ? "белгісіз қате" : e.getMessage();
+    }
+
+    private static class UpdateInfo {
+        final String tag;
+        final long versionCode;
+        final String downloadUrl;
+        final String digest;
+
+        UpdateInfo(String tag, long versionCode, String downloadUrl, String digest) {
+            this.tag = tag;
+            this.versionCode = versionCode;
+            this.downloadUrl = downloadUrl;
+            this.digest = digest;
+        }
     }
 
     private static class Risk {
