@@ -28,7 +28,7 @@ Android-қа арналған жергілікті APK ақпараттанды�
 
 Android Studio-да осы буманы ашып, Gradle Sync жаса. Қажет болса Android SDK 35 және JDK 17 орнат. Кейін `Build > Build Bundle(s) / APK(s) > Build APK(s)` таңда.
 
-GitHub Actions workflow-ы да қосылған. `main`-ге push болған сайын жоба Ubuntu runner-де жиналып, `SafeInstall-debug-apk` атты artifact ретінде сақталады. Оны репозиторийдегі **Actions → Build SafeInstall APK → Artifacts** бөлімінен жүктеуге болады.
+GitHub Actions workflow-ы да қосылған. `main`-ге push болған сайын жоба Ubuntu runner-де тұрақты signing key арқылы жиналып, `SafeInstall-release-apk` artifact-і және GitHub Release ретінде жарияланады. Қажетті secrets: `SAFEINSTALL_KEYSTORE_BASE64`, `SAFEINSTALL_KEYSTORE_PASSWORD`, `SAFEINSTALL_KEY_ALIAS`, `SAFEINSTALL_KEY_PASSWORD`. Егер бұрын Onay үшін қойылған `ONAY_*` атаулары қолданылса, workflow оларды да қабылдайды. Keystore файлын репозиторийге жүктеме.
 
 Жоба таза Java + Android Views арқылы жасалған, сондықтан қосымша сервер немесе аккаунт қажет емес.
 
