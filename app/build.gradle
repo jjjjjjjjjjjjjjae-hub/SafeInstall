@@ -2,6 +2,9 @@ plugins {
     id "com.android.application"
 }
 
+def buildVersionCode = (project.findProperty("appVersionCode") ?: "3").toString().toInteger()
+def buildVersionName = (project.findProperty("appVersionName") ?: "1.2").toString()
+
 android {
     namespace "kz.safeinstall.app"
     compileSdk 35
@@ -10,8 +13,8 @@ android {
         applicationId "kz.safeinstall.app"
         minSdk 26
         targetSdk 35
-        versionCode (project.findProperty("appVersionCode") ?: "3").toInteger()
-        versionName (project.findProperty("appVersionName") ?: "1.2")
+        versionCode buildVersionCode
+        versionName buildVersionName
     }
 }
 
