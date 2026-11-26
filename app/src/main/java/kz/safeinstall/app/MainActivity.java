@@ -43,11 +43,15 @@ public class MainActivity extends android.app.Activity {
     private static final long MAX_APK_BYTES = 500L * 1024L * 1024L;
     private static final String RELEASE_API =
             "https://api.github.com/repos/jjjjjjjjjjjjjjae-hub/SafeInstall/releases/latest";
+    private static final String RELEASE_LATEST_APK_URL =
+            "https://github.com/jjjjjjjjjjjjjjae-hub/SafeInstall/releases/latest/download/SafeInstall.apk";
     private static final String RELEASE_APK_NAME = "SafeInstall.apk";
     private static final String UPDATE_APK_FILE_NAME = "safeinstall-update.apk";
     private static final String UPDATE_APK_PART_FILE_NAME = "safeinstall-update.apk.part";
     private static final String ONAY_RELEASE_API =
             "https://api.github.com/repos/jjjjjjjjjjjjjjae-hub/onay-/releases/latest";
+    private static final String ONAY_LATEST_APK_URL =
+            "https://github.com/jjjjjjjjjjjjjjae-hub/onay-/releases/latest/download/ONAY-Demo.apk";
     private static final String ONAY_APK_NAME = "ONAY-Demo.apk";
     private static final String ONAY_PACKAGE = "kz.onay.demo";
     private static final String ONAY_UPDATE_APK_FILE_NAME = "onay-recovery.apk";
@@ -66,6 +70,7 @@ public class MainActivity extends android.app.Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean updateDialogShown;
     private boolean onayDialogShown;
+    private boolean incomingApkHandled = false;
     private boolean waitingForOnayUninstall;
 
     @Override
@@ -82,17 +87,15 @@ public class MainActivity extends android.app.Activity {
         signatureText = findViewById(R.id.signatureText);
         statusText = findViewById(R.id.statusText);
 
-        Button selectButton = findViewById(R.id.selectButton);
         Button installButton = findViewById(R.id.installButton);
         Button clearButton = findViewById(R.id.clearButton);
 
-        selectButton.setOnClickListener(v -> chooseApk());
         installButton.setOnClickListener(v -> startSystemInstaller());
         clearButton.setOnClickListener(v -> clearSelection());
 
         handleIncomingIntent(getIntent());
         checkForUpdate();
-        checkOnayRecovery();
+        if (!incomingApkHandled) checkOnayRecovery();
     }
 
     @Override
@@ -115,6 +118,7 @@ public class MainActivity extends android.app.Activity {
             source = intent.getClipData().getItemAt(0).getUri();
         }
         if (source == null) return;
+        incomingApkHandled = true;
 
         try {
             selectedApk = copyToPrivateCache(source);
@@ -156,7 +160,7 @@ public class MainActivity extends android.app.Activity {
                     UpdateInfo update = new UpdateInfo(
                             tag,
                             remoteVersionCode,
-                            asset.optString("browser_download_url", ""),
+                            RELEASE_LATEST_APK_URL,
                             asset.optString("digest", ""));
                     if (!update.downloadUrl.isEmpty()) {
                         mainHandler.post(() -> showUpdateDialog(update));
@@ -209,10 +213,10 @@ public class MainActivity extends android.app.Activity {
                     OnayUpdateInfo update = new OnayUpdateInfo(
                             tag,
                             remoteVersion,
-                            asset.optString("browser_download_url", ""),
+                            ONAY_LATEST_APK_URL,
                             asset.optString("digest", ""));
                     if (!update.downloadUrl.isEmpty()) {
-                        mainHandler.post(() -> showOnayRecoveryDialog(update, installedVersion));
+                        mainHandler.post(() -> downloadOnay(update));
                     }
                     return;
                 }
@@ -248,12 +252,15 @@ public class MainActivity extends android.app.Activity {
             HttpURLConnection connection = null;
             try {
                 connection = (HttpURLConnection) new URL(update.downloadUrl).openConnection();
+                connection.setInstanceFollowRedirects(true);
                 connection.setRequestMethod("GET");
-                connection.setConnectTimeout(10000);
-                connection.setReadTimeout(30000);
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(60000);
+                connection.setRequestProperty("Accept", "application/vnd.android.package-archive");
                 connection.setRequestProperty("User-Agent", "SafeInstall");
-                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                    throw new IllegalStateException("Onay APK-сы жүктелмеді");
+                int responseCode = connection.getResponseCode();
+                if (responseCode < 200 || responseCode >= 300) {
+                    throw new IllegalStateException("Onay APK-сы жүктелмеді (HTTP " + responseCode + ")");
                 }
                 try (InputStream input = connection.getInputStream();
                      FileOutputStream output = new FileOutputStream(part)) {
@@ -324,12 +331,15 @@ public class MainActivity extends android.app.Activity {
             HttpURLConnection connection = null;
             try {
                 connection = (HttpURLConnection) new URL(update.downloadUrl).openConnection();
+                connection.setInstanceFollowRedirects(true);
                 connection.setRequestMethod("GET");
-                connection.setConnectTimeout(10000);
-                connection.setReadTimeout(30000);
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(60000);
+                connection.setRequestProperty("Accept", "application/vnd.android.package-archive");
                 connection.setRequestProperty("User-Agent", "SafeInstall");
-                if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                    throw new IllegalStateException("Жаңарту файлы жүктелмеді");
+                int responseCode = connection.getResponseCode();
+                if (responseCode < 200 || responseCode >= 300) {
+                    throw new IllegalStateException("Жаңарту файлы жүктелмеді (HTTP " + responseCode + ")");
                 }
 
                 try (InputStream input = connection.getInputStream();
